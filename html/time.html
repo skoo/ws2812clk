@@ -1,0 +1,147 @@
+<html>
+<head>
+<title>WS2812 CLK</title>
+<script language="javascript">
+
+var state;
+var state_wait_ms;
+//var d_prev;
+var prev_timestamp;
+var time_to_set;
+var time_bits_left;
+
+var PROG_RESET_MS = 50
+
+var PROG_BITTIME_MS = 200
+var PROG_BIT_ON_MS = 150
+var PROG_BIT_OFF_MS = 50
+
+var canvas;
+var ctx;
+var width, height;
+
+function zpad(n)
+{
+	return n > 9 ? n : '0'+n;
+}
+
+function to_bcd(n)
+{
+	return (((n / 10) << 4) | n % 10);
+}
+
+function flash_handle_next()
+{
+	var bit = 0;
+
+	switch(state)
+	{
+	case 0:
+		var d = new Date();
+		var h = to_bcd(d.getHours());
+		var m = to_bcd(d.getMinutes());
+		var s = to_bcd(d.getSeconds());
+
+		time_to_set = (h << 24) | (m << 16) | (s << 8) | 0xff;
+		time_bits_left = 32;
+		
+	case 2:
+	case 4:
+	case 6:
+	case 8:
+		bit = 1;
+		state_wait_ms = PROG_RESET_MS;
+		state++;
+		break;
+
+	case 1:
+	case 3:
+	case 5:
+	case 7:
+	case 9:
+		bit = 0;
+		state_wait_ms = PROG_RESET_MS;
+		state++;
+		break;
+
+	case 10:
+		bit = 1;
+		state_wait_ms = time_to_set & 1 ? PROG_BIT_ON_MS : PROG_BIT_OFF_MS;
+		state++;
+		break;
+
+	case 11:
+		bit = 0;
+		state_wait_ms = time_to_set & 1 ? PROG_BIT_OFF_MS : PROG_BIT_ON_MS;
+
+		time_to_set >>= 1;
+		if (--time_bits_left > 0)
+		{
+			state = 10;
+		}
+		else
+		{
+			state = 12;
+		}
+		break;
+
+	case 12:
+		bit = 1;
+		state_wait_ms = 100;
+		state++;
+		break;
+
+	case 13:
+		bit = 0;
+		state_wait_ms = 400;
+		state = 0;
+		break;
+
+	}
+
+	if (bit)
+		ctx.fillRect(0, 0, width, height);
+	else
+		ctx.clearRect(0, 0, width, height);
+}
+
+function flash_time_sm(timestamp)
+{
+	var diff = timestamp - prev_timestamp;
+
+	window.requestAnimationFrame(flash_time_sm);
+
+	if (diff >= state_wait_ms)
+	{
+		flash_handle_next();
+		prev_timestamp = timestamp;
+	}
+}
+
+function flash_time()
+{
+	document.body.style.backgroundColor = 0;
+
+	canvas = document.getElementById("canvas"),
+  	ctx = canvas.getContext('2d'),
+  	width = window.innerWidth;
+  	height = window.innerHeight;
+
+  	canvas.width = width;
+  	canvas.height = height;
+
+	ctx.fillStyle = "#ffffff";
+
+	state = 0;
+	state_wait_ms = 0;
+	prev_timestamp = performance.now();
+
+	window.requestAnimationFrame(flash_time_sm);
+}
+
+</script>
+</head>
+<body onload="flash_time()">
+<canvas id="canvas"></canvas>
+</body>
+</html>
