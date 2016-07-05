@@ -1,0 +1,4 @@
+<resources>
+    <string name="app_name">SetClock</string>
+    <string name="url">"https://skoo.github.io/ws2812clk/html/time.html"</string>
+</resources>
