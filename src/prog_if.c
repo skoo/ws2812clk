@@ -19,6 +19,8 @@
 #define DATA_PULSE_ON 150
 #define DATA_PULSE_OFF 50
 
+#define PREAMPLE 0xAA
+
 /**
  *
  * Pulses:
@@ -31,7 +33,7 @@
  *
  * Data:
  *
- *	0xFF bcd_sec bcd_min bcd_hour
+ *	0xAA bcd_sec bcd_min bcd_hour
  *
  */
 
@@ -55,14 +57,13 @@
 
 #define WAVG(v1,w1,v2,w2) (((v1)*(w1)+(v2)*(w2))/(w1+w2))
 
+static uint32_t brg_average = 0;
+
 extern volatile uint32_t last_brg_value;
 volatile uint32_t prog_if_set_time_trigger = 0;
 
 static uint8_t _rx_data[8];
 static int _bytes_received = 0;
-
-static uint32_t low_point = 0;
-static uint32_t high_point = 1000;
 
 #ifdef ENABLE_BRG_HISTORY
 #define BRG_HIST_SIZE 1024
@@ -83,22 +84,17 @@ void TIM2_IRQHandler(void)
     if (TIM_GetITStatus(TIM2, TIM_IT_Update) == SET) {
         TIM_ClearITPendingBit(TIM2, TIM_IT_Update);
 
-	    /* Ignore program pulses while previously received
-	     * clock set command is not handled in main loop.
-	     */
-	    if (prog_if_set_time_trigger == 0)
-	    {
-	    	uint32_t brightness = last_brg_value;
-	#ifdef ENABLE_BRG_HISTORY
+    	uint32_t brightness = last_brg_value;
+
+#ifdef ENABLE_BRG_HISTORY
 			brg_values[brg_idx] = brightness;
 
 			if (++brg_idx == BRG_HIST_SIZE)
 			{
 				brg_idx = 0;
 			}
-	#endif
-	        prog_if(brightness);
-	    }
+#endif
+        prog_if(brightness);
 	}
 }
 
@@ -109,10 +105,9 @@ void prog_if_init(void)
     
     RCC_APB1PeriphClockCmd(RCC_APB1Periph_TIM2, ENABLE);
 
-    // 5000 counts in 20ms -> 4us
     ti.TIM_CounterMode = TIM_CounterMode_Up;
-    ti.TIM_ClockDivision = TIM_CKD_DIV1; // 24Mhz
-    ti.TIM_Prescaler = 6*1000; // 4kHz
+    ti.TIM_ClockDivision = TIM_CKD_DIV1; // 48Mhz
+    ti.TIM_Prescaler = 6*1000; // 8kHz
     ti.TIM_Period = 80; // 100Hz
 
     TIM_TimeBaseInit(TIM2, &ti);
@@ -154,9 +149,8 @@ static void handle_pulse(uint32_t bit_on_time, uint32_t bit_off_time)
 	if (bit_time >= RESET_PULSE*2 - RESET_PULSE_THRESHOLD &&
 		bit_time <= RESET_PULSE*2 + RESET_PULSE_THRESHOLD)
 	{
-	    if (++start_reset_counter == 5)
+	    if (++start_reset_counter > 3)
 	    {
-	    	start_reset_counter = 0;
 	    	started = 1,
 	    	bit_pos = 0;
 	    	data_byte = 0;
@@ -166,6 +160,8 @@ static void handle_pulse(uint32_t bit_on_time, uint32_t bit_off_time)
 	}
 	else if (started)
 	{
+		start_reset_counter = 0;
+
 	    /* data bits */
 	    if (bit_time >= DATA_PULSE - DATA_PULSE_THRESHOLD &&
 	    	bit_time <= DATA_PULSE + DATA_PULSE_THRESHOLD)
@@ -178,7 +174,7 @@ static void handle_pulse(uint32_t bit_on_time, uint32_t bit_off_time)
 	        if (++bit_pos == 8)
 	        {
 	            _rx_data[_bytes_received++] = data_byte;
-	            if ((_rx_data[0] = 0xff) && (_bytes_received == 4))
+	            if ((_rx_data[0] == PREAMPLE) && (_bytes_received == 4))
 	            {
 	                prog_if_set_time_trigger++;
 	                started = 0;
@@ -207,54 +203,33 @@ static void handle_pulse(uint32_t bit_on_time, uint32_t bit_off_time)
 
 void prog_if(uint32_t brightness)
 {
-	static uint32_t prev_brightness = 0;
 	static uint32_t state_on = 0;
 	static uint32_t len = 0;
 	static uint32_t len_on = 0;
-	static int dir = 0;
 
-	/* adjust brightness min/max values (threshold) */
+	brg_average = WAVG(brg_average, 7, brightness, 1);
 
-	if (brightness > high_point)
-	{
-		high_point = WAVG(high_point, 7, brightness, 1);
-	}
-
-	if (brightness < low_point)
-	{
-		low_point = WAVG(low_point, 7, brightness, 1);
-	}
-
-	if (brightness > prev_brightness)
-	{
-		if (dir < 0)
-		{
-			low_point = WAVG(low_point, 15, prev_brightness, 1);
-		}
-		dir = 1;
-	}
-	else if (brightness < prev_brightness)
-	{
-		if (dir > 0)
-		{
-				high_point = WAVG(high_point, 15, prev_brightness, 1);
-		}
-		dir = -1;
-	}
-
-	/* check brightness against current threshold */
-
-	if (brightness >= WAVG(low_point, 2, high_point, 1))
+	if (brightness >= brg_average)
 	{
 		if (!state_on)
 		{
 			// off -> on
-			handle_pulse(TICKS2MS(len_on), TICKS2MS(len));
+
+		    /* Ignore program pulses while previously received
+		     * clock set command is not handled in main loop.
+		     */
+		    if (prog_if_set_time_trigger == 0)
+		    {
+				handle_pulse(TICKS2MS(len_on), TICKS2MS(len));
+			}
+
 			state_on = 1;
 			len = 0;
 		}
-
-		len++;
+		else
+		{
+			len++;
+		}
 	}
 	else
 	{
@@ -268,6 +243,4 @@ void prog_if(uint32_t brightness)
 
 		len++;
 	}
-
-	prev_brightness = brightness;
 }

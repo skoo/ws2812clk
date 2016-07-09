@@ -16,6 +16,8 @@ var PROG_BITTIME_MS = 200
 var PROG_BIT_ON_MS = 150
 var PROG_BIT_OFF_MS = 50
 
+var PREAMPLE = 0xAA
+
 var canvas;
 var ctx;
 var width, height;
@@ -42,7 +44,7 @@ function flash_handle_next()
 		var m = to_bcd(d.getMinutes());
 		var s = to_bcd(d.getSeconds());
 
-		time_to_set = (h << 24) | (m << 16) | (s << 8) | 0xff;
+		time_to_set = (h << 24) | (m << 16) | (s << 8) | PREAMPLE;
 		time_bits_left = 32;
 		
 	case 2:
@@ -81,22 +83,9 @@ function flash_handle_next()
 		}
 		else
 		{
-			state = 12;
+			state = 0;
 		}
 		break;
-
-	case 12:
-		bit = 1;
-		state_wait_ms = 100;
-		state++;
-		break;
-
-	case 13:
-		bit = 0;
-		state_wait_ms = 400;
-		state = 0;
-		break;
-
 	}
 
 	if (bit)
