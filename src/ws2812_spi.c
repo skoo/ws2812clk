@@ -72,8 +72,13 @@
  */
 static uint8_t ws2812_buffer[60*3*CODE_BIT_COUNT+RESET_PULSE_BYTE_COUNT];
 
+static int _auto_update = 0;
+static volatile int _update_ongoing;
+
 static void start_transfer(void* ptr, uint32_t len)
 {
+	_update_ongoing = 1;
+
 	DMA_Cmd(DMA1_Channel3, DISABLE);
 
 	DMA1_Channel3->CMAR = (uint32_t)ptr;
@@ -87,8 +92,12 @@ void DMA1_Channel2_3_IRQHandler(void)
 {
 	if (DMA_GetITStatus(DMA1_IT_TC3) == SET) {
 		DMA_ClearITPendingBit(DMA1_IT_TC3);
-		/* Trigger new DMA transfer */
-		start_transfer(&ws2812_buffer, sizeof(ws2812_buffer));
+		_update_ongoing = 0;
+		if (_auto_update)
+		{
+			/* Trigger new DMA transfer */
+			start_transfer(&ws2812_buffer, sizeof(ws2812_buffer));
+		}
 	}
 }
 
@@ -159,7 +168,8 @@ static void ws2812_spi_init(void)
 	SPI_I2S_DMACmd(SPI1, SPI_I2S_DMAReq_Tx, ENABLE);
 	SPI_Cmd(SPI1, ENABLE);
 
-	start_transfer(&ws2812_buffer, sizeof(ws2812_buffer));
+	if(_auto_update)
+		start_transfer(&ws2812_buffer, sizeof(ws2812_buffer));
 }
 
 #ifdef USE_3MHz_CLK
@@ -235,9 +245,22 @@ void ws2812_led(uint32_t pos, uint8_t r, uint8_t g, uint8_t b)
 
 #endif
 
-void ws2812_init(void)
+void ws2812_init(int auto_update)
 {
+	_auto_update = auto_update;
+
 	memset(ws2812_buffer, WS2812_BIT_OFF, sizeof(ws2812_buffer)-RESET_PULSE_BYTE_COUNT);
 	memset(ws2812_buffer+sizeof(ws2812_buffer)-RESET_PULSE_BYTE_COUNT, 0xff, RESET_PULSE_BYTE_COUNT);
 	ws2812_spi_init();
+}
+
+void ws2812_update(void)
+{
+	if (!_auto_update)
+	{
+		while (_update_ongoing);
+		
+		/* Trigger new DMA transfer */
+		start_transfer(&ws2812_buffer, sizeof(ws2812_buffer));
+	}
 }

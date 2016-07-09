@@ -3,112 +3,169 @@
 
 #include "stm32f0xx_conf.h"
 
-#define SRC_NONE        0x0000
-#define SRC_SEC         0x0100
-#define SRC_MIN         0x0200
-#define SRC_HOUR        0x0300
-#define SRC_HOUR_MIN    0x0400
-#define SRC_INDEX       0x0500
-#define SRC_MEM         0x0800
-#define SRC_MEM0        0x0800
-#define SRC_MEM1        0x0900
-#define SRC_MEM2        0x0A00
-#define SRC_MEM3        0x0B00
-
-#define OP_NONE         0x0000
-#define OP_MOD          0x1000
-#define OP_ADD          0x2000
-#define OP_SUB          0x3000
-#define OP_MUL          0x4000
-#define OP_DIV          0x5000
-#define OP_NEG          0x8000
-
-#define COMP_NEQU       0x0000
-#define COMP_EQU        0x0100
-#define COMP_GT         0x0200
-#define COMP_LT         0x0400
-#define COMP_GTE        0x0300
-#define COMP_LTE        0x0500
-
-#define SRC_MASK        0x0f00
-#define SRC_MEM_MASK    0x0800
-#define OP_MASK         0xf000
-#define COMP_MASK       0x0f00
-#define VAL_MASK        0x00ff
-
-#define DST_RED     0x10
-#define DST_GREEN   0x20
-#define DST_BLUE    0x40
-#define DST_RGB     0x70
-#define DST_MEM     0x80
-
-#define DST_RGB_MASK 0x70
-#define DST_MEM_MASK 0x80
-
 #define saturate(v,min,max) if (v < min) v = min; if (v > max) v = max
 
-typedef struct _CLK_OP
+typedef enum
 {
-    uint16_t    op_comp_val;
-    int16_t     comp_val;
-    uint16_t     dst_op_val;
-    uint8_t     dst;
-} clock_op_t;
+    ARC_STOP_OFF = 0,
+    ARC_STOP_FULL = 1,
+    ARC_STOP_HALF = 2,
+    ARC_STOP_QUARTER = 3,
+    ARC_STOP_HOUR_MARKER = 4,
+} clock_arc_stop_t;
 
-const clock_op_t _clk_ops[] __attribute__ ((section (".clockface_data"))) =
+typedef enum
 {
-    { OP_MOD  | COMP_EQU   | 5, 0,                 8,   DST_RGB},
-    { OP_NONE  | COMP_EQU  | 0, 0,                 16,   DST_RGB},
-    { OP_NONE | COMP_EQU   | 0, SRC_SEC,         32,   DST_BLUE},
-    { OP_NONE | COMP_EQU   | 0, SRC_HOUR_MIN,    64,   DST_RED},
-    { OP_SUB  | COMP_EQU   | 1, SRC_MIN,         SRC_SEC | OP_DIV | 2,          DST_GREEN},
-    { OP_NONE | COMP_EQU   | 0, SRC_MIN,         SRC_SEC | OP_DIV | 2 | OP_NEG, DST_MEM | 1},
-    { OP_NONE | COMP_EQU   | 0, SRC_MIN,         SRC_MEM1 | OP_ADD | 30,         DST_GREEN},
-    { OP_NONE | COMP_LT    | 0, SRC_SEC,         4,       DST_MEM | 2},
-    { OP_ADD  | COMP_GT    | 30, SRC_SEC,        SRC_MEM2, DST_BLUE},
+    ARC_FADE_NORMAL = 0,
+    ARC_FADE_SINGLE = 1,
+} clock_arc_fade_t;
+
+typedef struct COLOR
+{
+    uint8_t r;
+    uint8_t g;
+    uint8_t b;
+} color_t;
+
+typedef struct CLOCKARC
+{
+    uint8_t len;
+    uint8_t stop;
+    uint8_t fade:7;
+    uint8_t fade_type:1;
+} clock_arc_t;
+
+typedef struct CLOCKHAND
+{
+    color_t color;
+    clock_arc_t backward;
+    clock_arc_t forward;
+} clock_hand_t;
+
+typedef struct CLOCKFACE
+{
+    clock_hand_t hours;
+    clock_hand_t minutes;
+    clock_hand_t seconds;
+
+    color_t circle_color;
+    color_t hour_marker_color;
+} clock_face_t;
+
+const clock_face_t _clk_face __attribute__ ((section (".clockface_data"))) =
+{
+    .hours =
+    {
+        .color = { .r = 64 , .g = 0, .b = 0 },
+
+        .backward =
+        {
+            .len = 0, .stop = 0, .fade_type = 0
+        },
+
+        .forward =
+        {
+            .len = 0, .stop = 0, .fade_type = 0
+        },
+    },
+
+    .minutes = 
+    {
+        .color = { .r = 0 , .g = 30, .b = 0 },
+
+        .backward =
+        {
+            .len = 30,
+            .stop = ARC_STOP_HOUR_MARKER,
+            .fade_type = ARC_FADE_NORMAL,
+            .fade = 3,
+        },
+
+        .forward =
+        {
+            .len = 0, .stop = 0, .fade_type = 0
+        },
+    },
+
+    .seconds =
+    {
+        .color = { .r = 0, .g = 0, .b = 32 },
+        .backward =
+        {
+            .len = 0, .stop = 0, .fade_type = 0
+        },
+
+        .forward =
+        {
+            .len = 0, .stop = 0, .fade_type = 0
+        },
+    },
+
+    .circle_color = { .r = 4, .g = 4, .b = 4 },
+    .hour_marker_color = { .r = 13, .g = 13, .b = 13 },
 };
 
-static int16_t _mem[4];
-
-static int16_t clk_op(uint16_t op, int16_t val, int wrap)
+static void clockface_draw_arc(const clock_arc_t* arc, const color_t* color, int dir, int position)
 {
-    int16_t op_val =  op & VAL_MASK;
+    int fade_done = 0;
+    color_t c = *color;
 
-    switch (op & (OP_MASK ^ OP_NEG))
+    for (int len = arc->len; len > 0; len--)
     {
-    case OP_MOD:
-        val %= op_val;
-        break;
-    case OP_ADD:
-        val += op_val;
-        break;
-    case OP_SUB:
-        val -= op_val;
-        break;
-    case OP_MUL:
-        val *= op_val;
-        break;
-    case OP_DIV:
-        val /= op_val;
-        break;
+        if (arc->stop == ARC_STOP_HOUR_MARKER)
+        {
+            if (position % 5 == 0)
+                return;
+        }
+        else if (arc->stop == ARC_STOP_QUARTER)
+        {
+            if (position % 15 == 0)
+                return;
+        }
+        else if (arc->stop == ARC_STOP_HALF)
+        {
+            if (position == 0 || position == 30)
+                return;
+        }
+        else if (arc->stop == ARC_STOP_FULL && position == 0)
+        {
+            return;
+        }
+
+        if (!fade_done)
+        {
+            if (arc->fade_type == ARC_FADE_SINGLE)
+                fade_done = 1;
+
+            if (arc->fade)
+            {
+                c.r /= arc->fade;
+                c.g /= arc->fade;
+                c.b /= arc->fade;
+            }
+        }
+
+        position += dir;
+        if (position < 0)
+            position += 60;
+        else if(position > 59)
+            position -= 60;
+
+        ws2812_led(position, c.r, c.g, c.b);
     }
-
-    if (op & OP_NEG)
-    {
-        val *= -1;
-    }
-
-    if (wrap)
-    {
-        if (val >= 60)
-            val -= 60;
-
-        if (val <= -60)
-            val = -60;
-    }
-
-    return val;
 }
+
+static void clockface_draw_hand(const clock_hand_t* hand, uint8_t position, int draw_arcs)
+{
+    if (draw_arcs)
+    {
+        clockface_draw_arc(&hand->backward, &hand->color, -1, position);
+        clockface_draw_arc(&hand->forward, &hand->color, 1, position);
+    }
+
+    ws2812_led(position, hand->color.r, hand->color.g, hand->color.b);
+}
+
 
 void clockface_draw(rtc_time_t* t)
 {
@@ -118,127 +175,27 @@ void clockface_draw(rtc_time_t* t)
 
     for (i = 0; i < 60; i++)
     {
-        int16_t r = 0;
-        int16_t g = 0;
-        int16_t b = 0;
-
-        _mem[0] = 0;
-        _mem[1] = 0;
-        _mem[2] = 0;
-        _mem[3] = 0;
-
-        unsigned int op;
-        for (op = 0; op < sizeof(_clk_ops)/sizeof(clock_op_t); op++)
-        {
-            int16_t val = clk_op(_clk_ops[op].op_comp_val, i, 1);
-
-            int16_t comp = _clk_ops[op].comp_val & 0x00ff;
-
-            switch (_clk_ops[op].comp_val & SRC_MASK)
-            {
-            case SRC_SEC:
-                comp = t->sec;
-                break;
-            case SRC_MIN:
-                comp = t->min;
-                break;
-            case SRC_HOUR:
-                comp = h;
-                break;
-            case SRC_HOUR_MIN:
-                comp = hm;
-                break;
-            case SRC_INDEX:
-                comp = i;
-            case SRC_MEM:
-                comp = _mem[comp & 0x03];
-                break;
-            }
-
-            int diff = val - comp;
-            if (diff >= 30)
-                diff -= 60;
-            else if (diff < -30)
-                diff += 60;
-
-            int match = 0;
-
-            switch (_clk_ops[op].op_comp_val & COMP_MASK)
-            {
-            case COMP_NEQU:
-                match = diff != 0;
-                break;
-            case COMP_EQU:
-                match = diff == 0;
-                break;
-            case COMP_GT:
-                match = diff > 0;
-                break;
-            case COMP_LT:
-                match = diff < 0;
-                break;
-            case COMP_GTE:
-                match = diff >= 0;
-                break;
-            case COMP_LTE:
-                match = diff <= 0;
-                break;
-            }
-
-            if (match)
-            {
-                int16_t src = _clk_ops[op].dst_op_val & 0xff;
-
-                if (_clk_ops[op].dst_op_val & SRC_MEM_MASK)
-                {
-                    src = _mem[(_clk_ops[op].dst_op_val >> 8) & 3];
-                }
-                else
-                {
-                    switch (_clk_ops[op].dst_op_val & SRC_MASK)
-                    {
-                    case SRC_SEC:
-                        src = t->sec;
-                        break;
-                    case SRC_MIN:
-                        src = t->min;
-                        break;
-                    case SRC_HOUR:
-                        src = h;
-                        break;
-                    case SRC_HOUR_MIN:
-                        src = hm;
-                    case SRC_INDEX:
-                        src = i;
-                        break;
-
-                    }
-                }
-
-                int16_t dst_val = clk_op(_clk_ops[op].dst_op_val, src, 0);
-
-                if (_clk_ops[op].dst & DST_MEM_MASK)
-                {
-                    _mem[_clk_ops[op].dst & 3] = dst_val;
-                }
-                else
-                {
-                    if (_clk_ops[op].dst & DST_RED)
-                        r += dst_val;
-                    if (_clk_ops[op].dst & DST_GREEN)
-                        g += dst_val;
-                    if (_clk_ops[op].dst & DST_BLUE)
-                        b += dst_val;
-                }
-            }
-        }
-
-       saturate(r, 0, 255);
-       saturate(g, 0, 255);
-       saturate(b, 0, 255);
-
-        ws2812_led(i, r, g, b);
+        const color_t* c = &_clk_face.circle_color;
+        ws2812_led(i, c->r, c->g, c->b);
     }
+
+    clockface_draw_hand(&_clk_face.seconds, t->sec, 1);
+    clockface_draw_hand(&_clk_face.minutes, t->min, 1);
+    clockface_draw_hand(&_clk_face.hours, hm, 1);
+
+    for (i = 0; i < 60; i++)
+    {
+        const color_t* c = &_clk_face.hour_marker_color;
+
+        if (i % 5 == 0)
+        {
+            ws2812_led(i, c->r, c->g, c->b);
+        }
+    }
+
+    clockface_draw_hand(&_clk_face.seconds, t->sec, 0);
+    clockface_draw_hand(&_clk_face.minutes, t->min, 0);
+    clockface_draw_hand(&_clk_face.hours, hm, 0);
 }
 
 void clockface_fill(uint8_t r, uint8_t g, uint8_t b)

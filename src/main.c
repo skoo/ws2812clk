@@ -47,7 +47,7 @@ int main(void)
     pcf8523_init();
 
 	led_power_enable(1);
-    ws2812_init();
+    ws2812_init(0);
 
     int no_light_sensor = 1;
 
@@ -65,8 +65,10 @@ int main(void)
 	        for (i = 0; i < 5; i++)
 	        {
 	            clockface_fill(16, 0, 0);
+	            ws2812_update();
 	            delay_ms(333);
 	            clockface_fill(0, 0, 0);
+	            ws2812_update();
 	        }
 	    }
 	} while (no_light_sensor);
@@ -107,5 +109,7 @@ int main(void)
             clockface_fill(0, 8, 8);
             delay_ms(500);
 		}
+
+		ws2812_update();
 	}
 }
