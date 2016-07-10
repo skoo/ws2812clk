@@ -107,6 +107,7 @@ int main(void)
 		    prog_if_set_time_trigger = 0;
 		    pcf8523_write_regs(RTC_TIME_REG_OFFSET_SEC, prog_if_get_prog_data(), 3);
             clockface_fill(0, 8, 8);
+            ws2812_update();
             delay_ms(500);
 		}
 
